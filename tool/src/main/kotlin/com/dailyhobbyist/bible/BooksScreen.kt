@@ -74,7 +74,6 @@ class BooksScreen(
                             LightText(
                                 text = "${book.chapters}",
                                 variant = LightTextVariant.Detail,
-                                lighten = true,
                             )
                         }
                     }

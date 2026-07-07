@@ -237,9 +237,6 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             MenuRow("NEW TESTAMENT") {
                 navigateTo({ sa -> BooksScreen(sa, isOldTestament = false) })
             }
-            MenuRow("LOOKUP") {
-                navigateTo(::LookupScreen)
-            }
             MenuRow("SEARCH") {
                 navigateTo(::SearchScreen)
             }
