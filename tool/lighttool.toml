@@ -1,8 +1,8 @@
 [tool]
 id = "com.dailyhobbyist.bible"
 label = "Bible"
-versionCode = 5
-versionName = "1.4"
+versionCode = 11
+versionName = "2.0"
 permissions = ["android.permission.INTERNET"]
 # change if you run this on an LP3!
 # serverPackage = "com.lightos"

@@ -25,9 +25,11 @@ import com.thelightphone.sdk.ui.LightTopBar
 import com.thelightphone.sdk.ui.LightTopBarCenter
 import com.thelightphone.sdk.ui.gridUnitsAsDp
 import com.thelightphone.sdk.ui.lightClickable
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 
@@ -39,12 +41,15 @@ sealed interface HomeMode {
 
 class HomeViewModel(
     private val dataStore: DataStore<Preferences>,
+    private val repository: BibleRepository,
 ) : LightViewModel<Unit>() {
 
     val mode = MutableStateFlow<HomeMode>(HomeMode.Loading)
+    val toast = MutableStateFlow<String?>(null)
 
     override fun onScreenShow(screen: SimpleLightScreen<Unit>) {
         super.onScreenShow(screen)
+        toast.value = null   // clear any stale "no saved spot" hint on return
         refresh()
     }
 
@@ -99,6 +104,27 @@ class HomeViewModel(
         }
     }
 
+    /**
+     * Loads the saved position for the current version and invokes [open]
+     * with (bookIndex, chapter, verse). If nothing is saved yet, shows a hint.
+     */
+    fun resumeReading(open: (Int, Int, Int) -> Unit) {
+        viewModelScope.launch {
+            val versionId = dataStore.data.first()[BiblePrefs.SELECTED_VERSION]
+                ?: BibleVersions.default.id
+            val pos = withContext(Dispatchers.IO) { repository.getPosition(versionId) }
+            if (pos == null) {
+                toast.value = "No bookmark yet. Tap the bookmark icon while reading to set one."
+            } else {
+                open(pos.bookIndex, pos.chapter, pos.verse)
+            }
+        }
+    }
+
+    fun clearToast() {
+        toast.value = null
+    }
+
     fun startFirstRunDownload() {
         viewModelScope.launch {
             mode.value = HomeMode.FirstRun(progress = 0f, error = null)
@@ -127,12 +153,13 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
 
     override fun createViewModel(): HomeViewModel {
         Bible.init(lightContext.filesDir)
-        return HomeViewModel(lightContext.dataStore)
+        return HomeViewModel(lightContext.dataStore, lightContext.bibleRepository())
     }
 
     @Composable
     override fun Content() {
         val mode by viewModel.mode.collectAsState()
+        val toast by viewModel.toast.collectAsState()
 
         // The top bar title is the version being read (e.g. "King James Version").
         // Before anything is downloaded there's no version yet, so fall back to "Bible".
@@ -161,6 +188,18 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                     is HomeMode.FirstRun -> FirstRunContent(m)
 
                     is HomeMode.Menu -> MenuContent()
+                }
+
+                toast?.let { msg ->
+                    LightText(
+                        text = msg,
+                        variant = LightTextVariant.Detail,
+                        lighten = true,
+                        modifier = Modifier.padding(
+                            horizontal = 1.5f.gridUnitsAsDp(),
+                            vertical = 0.75f.gridUnitsAsDp(),
+                        ),
+                    )
                 }
             }
         }
@@ -236,6 +275,14 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             }
             MenuRow("NEW TESTAMENT") {
                 navigateTo({ sa -> BooksScreen(sa, isOldTestament = false) })
+            }
+            MenuRow("BOOKMARK") {
+                viewModel.resumeReading { book, chapter, verse ->
+                    navigateTo({ sa -> ReaderScreen(sa, book, chapter, verse) })
+                }
+            }
+            MenuRow("SAVED") {
+                navigateTo(::SavedScreen)
             }
             MenuRow("SEARCH") {
                 navigateTo(::SearchScreen)

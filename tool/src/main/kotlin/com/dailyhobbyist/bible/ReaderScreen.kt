@@ -1,6 +1,8 @@
 package com.dailyhobbyist.bible
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,9 +34,19 @@ import com.thelightphone.sdk.ui.LightTopBar
 import com.thelightphone.sdk.ui.LightTopBarCenter
 import com.thelightphone.sdk.ui.gridUnitsAsDp
 import com.thelightphone.sdk.ui.lightClickable
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** A modal question shown over the reader. */
+sealed interface ReaderDialog {
+    data object None : ReaderDialog
+    data object SavePosition : ReaderDialog
+    data class SaveVerse(val verse: VerseJson) : ReaderDialog
+    data class RemoveVerse(val verse: VerseJson) : ReaderDialog
+}
 
 data class ReaderState(
     val bookIndex: Int,
@@ -45,14 +57,23 @@ data class ReaderState(
     val error: String? = null,
     /** Verse numbers the reader has tapped — session only, never saved. */
     val highlighted: Set<Int> = emptySet(),
-    /** One-time target verse to scroll to (from Lookup or Search). */
+    /** Verse numbers that are permanently saved (bookmarks). */
+    val savedVerses: Set<Int> = emptySet(),
+    /** One-time target verse to scroll to (from Where I Left Off or Search). */
     val scrollTarget: Int? = null,
     /** Publisher copyright line for online versions (shown after the last verse). */
     val copyright: String? = null,
+    val dialog: ReaderDialog = ReaderDialog.None,
+    val toast: String? = null,
+    /** True when the pending long-press dialog added a highlight we should undo on cancel. */
+    val longPressAddedHighlight: Boolean = false,
+    /** True when this chapter is the saved reading position for this version. */
+    val isBookmarkedSpot: Boolean = false,
 )
 
 class ReaderViewModel(
     private val dataStore: DataStore<Preferences>,
+    private val repository: BibleRepository,
     initialBook: Int,
     initialChapter: Int,
     initialTarget: Int?,
@@ -100,15 +121,31 @@ class ReaderViewModel(
                     else -> Bible.store.loadChapter(versionId, s.bookIndex, s.chapter)
                 }
 
+                // Which verses in this chapter are already saved?
+                val saved = withContext(Dispatchers.IO) {
+                    verses.filter {
+                        repository.isSaved(versionId, s.bookIndex, s.chapter, it.verse)
+                    }.map { it.verse }.toSet()
+                }
+
+                // Is this chapter the saved reading position for this version?
+                val savedPosition = withContext(Dispatchers.IO) {
+                    repository.getPosition(versionId)
+                }
+                val isSpot = savedPosition != null &&
+                    savedPosition.bookIndex == s.bookIndex &&
+                    savedPosition.chapter == s.chapter
+
                 val current = state.value
                 state.value = current.copy(
                     versionId = versionId,
                     verses = verses,
                     loading = false,
                     error = if (verses.isEmpty()) "Chapter not found in this version." else null,
-                    // A verse arrived at via Lookup/Search starts out highlighted
                     highlighted = current.scrollTarget?.let { current.highlighted + it }
                         ?: current.highlighted,
+                    savedVerses = saved,
+                    isBookmarkedSpot = isSpot,
                     copyright = copyright,
                 )
             } catch (e: Exception) {
@@ -125,6 +162,109 @@ class ReaderViewModel(
         val set = s.highlighted.toMutableSet()
         if (!set.add(verse)) set.remove(verse)
         state.value = s.copy(highlighted = set)
+    }
+
+    // ── Long-press → ask to save or remove ──
+    fun onVerseLongPress(verse: VerseJson) {
+        val s = state.value
+        // Remember whether it was already highlighted, so Cancel can restore state
+        val wasHighlighted = s.highlighted.contains(verse.verse)
+        state.value = s.copy(
+            highlighted = s.highlighted + verse.verse,
+            longPressAddedHighlight = !wasHighlighted,
+            dialog = if (s.savedVerses.contains(verse.verse)) {
+                ReaderDialog.RemoveVerse(verse)
+            } else {
+                ReaderDialog.SaveVerse(verse)
+            },
+        )
+    }
+
+    fun confirmSaveVerse(verse: VerseJson) {
+        viewModelScope.launch {
+            val s = state.value
+            withContext(Dispatchers.IO) {
+                repository.toggleSave(
+                    versionId = s.versionId,
+                    bookIndex = s.bookIndex,
+                    chapter = s.chapter,
+                    verse = verse.verse,
+                    text = verse.text,
+                )
+            }
+            state.value = state.value.copy(
+                savedVerses = state.value.savedVerses + verse.verse,
+                dialog = ReaderDialog.None,
+                longPressAddedHighlight = false,
+                toast = "Saved",
+            )
+        }
+    }
+
+    fun confirmRemoveVerse(verse: VerseJson) {
+        viewModelScope.launch {
+            val s = state.value
+            withContext(Dispatchers.IO) {
+                repository.toggleSave(
+                    versionId = s.versionId,
+                    bookIndex = s.bookIndex,
+                    chapter = s.chapter,
+                    verse = verse.verse,
+                    text = verse.text,
+                )
+            }
+            state.value = state.value.copy(
+                savedVerses = state.value.savedVerses - verse.verse,
+                dialog = ReaderDialog.None,
+                longPressAddedHighlight = false,
+                toast = "Removed",
+            )
+        }
+    }
+
+    // ── Bookmark icon → save reading position ──
+    fun askSavePosition() {
+        state.value = state.value.copy(dialog = ReaderDialog.SavePosition)
+    }
+
+    fun confirmSavePosition() {
+        viewModelScope.launch {
+            val s = state.value
+            // Save the first visible verse (or verse 1) as the resume point
+            val verse = s.scrollTarget ?: s.verses.firstOrNull()?.verse ?: 1
+            withContext(Dispatchers.IO) {
+                repository.savePosition(s.versionId, s.bookIndex, s.chapter, verse)
+            }
+            state.value = state.value.copy(
+                dialog = ReaderDialog.None,
+                isBookmarkedSpot = true,
+                toast = "Spot saved",
+            )
+        }
+    }
+
+    fun dismissDialog() {
+        val s = state.value
+        // If the long-press added a highlight purely to show the target, remove it on cancel
+        val restored = if (s.longPressAddedHighlight) {
+            val pendingVerse = when (val d = s.dialog) {
+                is ReaderDialog.SaveVerse -> d.verse.verse
+                is ReaderDialog.RemoveVerse -> d.verse.verse
+                else -> null
+            }
+            if (pendingVerse != null) s.highlighted - pendingVerse else s.highlighted
+        } else {
+            s.highlighted
+        }
+        state.value = s.copy(
+            dialog = ReaderDialog.None,
+            highlighted = restored,
+            longPressAddedHighlight = false,
+        )
+    }
+
+    fun clearToast() {
+        state.value = state.value.copy(toast = null)
     }
 
     fun consumeScrollTarget() {
@@ -147,8 +287,22 @@ class ReaderViewModel(
             newChapter = 1
         }
 
-        state.value = ReaderState(bookIndex = newBook, chapter = newChapter)
+        // keep the current version; only reset chapter-scoped fields
+        state.value = ReaderState(
+            bookIndex = newBook,
+            chapter = newChapter,
+            versionId = s.versionId,
+        )
         load()
+    }
+
+    override fun onBackPressed(): Boolean {
+        return if (state.value.dialog != ReaderDialog.None) {
+            dismissDialog()
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -164,7 +318,13 @@ class ReaderScreen(
 
     override fun createViewModel(): ReaderViewModel {
         Bible.init(lightContext.filesDir)
-        return ReaderViewModel(lightContext.dataStore, bookIndex, chapter, highlightVerse)
+        return ReaderViewModel(
+            lightContext.dataStore,
+            lightContext.bibleRepository(),
+            bookIndex,
+            chapter,
+            highlightVerse,
+        )
     }
 
     @Composable
@@ -173,7 +333,6 @@ class ReaderScreen(
         val book = BibleBooks.all[state.bookIndex]
         val listState = rememberLazyListState()
 
-        // Scroll once to the lookup/search target verse
         LaunchedEffect(state.scrollTarget, state.verses) {
             val target = state.scrollTarget
             if (target != null && state.verses.isNotEmpty()) {
@@ -197,6 +356,17 @@ class ReaderScreen(
                         } else {
                             state.versionId
                         },
+                    ),
+                    rightButton = LightBarButton.Icon(
+                        painter = androidx.compose.ui.res.painterResource(
+                            id = if (state.isBookmarkedSpot) {
+                                R.drawable.ic_bookmark_white
+                            } else {
+                                R.drawable.ic_bookmark_outline_white
+                            },
+                        ),
+                        onClick = { viewModel.askSavePosition() },
+                        contentDescription = "save reading position",
                     ),
                     modifier = Modifier.padding(bottom = 0.5f.gridUnitsAsDp()),
                 )
@@ -235,10 +405,11 @@ class ReaderScreen(
                         VerseRow(
                             verse = verse,
                             highlighted = isHighlighted,
+                            saved = state.savedVerses.contains(verse.verse),
                             onTap = { viewModel.toggleHighlight(verse.verse) },
+                            onLongPress = { viewModel.onVerseLongPress(verse) },
                         )
                     }
-                    // Publisher attribution (required for licensed versions)
                     val copyrightLine = state.copyright
                     if (copyrightLine != null && state.verses.isNotEmpty()) {
                         item {
@@ -279,11 +450,40 @@ class ReaderScreen(
                     ),
                 )
             }
+
+            // ── Dialogs ──
+            when (val d = state.dialog) {
+                is ReaderDialog.SavePosition -> ConfirmDialog(
+                    message = "Bookmark this spot?\n${book.name} ${state.chapter}",
+                    confirmLabel = "SAVE",
+                    onConfirm = { viewModel.confirmSavePosition() },
+                    onCancel = { viewModel.dismissDialog() },
+                )
+                is ReaderDialog.SaveVerse -> ConfirmDialog(
+                    message = "Save this verse?\n${book.name} ${state.chapter}:${d.verse.verse}",
+                    confirmLabel = "SAVE",
+                    onConfirm = { viewModel.confirmSaveVerse(d.verse) },
+                    onCancel = { viewModel.dismissDialog() },
+                )
+                is ReaderDialog.RemoveVerse -> ConfirmDialog(
+                    message = "Remove this saved verse?\n${book.name} ${state.chapter}:${d.verse.verse}",
+                    confirmLabel = "REMOVE",
+                    onConfirm = { viewModel.confirmRemoveVerse(d.verse) },
+                    onCancel = { viewModel.dismissDialog() },
+                )
+                is ReaderDialog.None -> {}
+            }
         }
     }
 
     @Composable
-    private fun VerseRow(verse: VerseJson, highlighted: Boolean, onTap: () -> Unit) {
+    private fun VerseRow(
+        verse: VerseJson,
+        highlighted: Boolean,
+        saved: Boolean,
+        onTap: () -> Unit,
+        onLongPress: () -> Unit,
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -294,11 +494,14 @@ class ReaderScreen(
                         Modifier
                     }
                 )
-                .lightClickable { onTap() }
+                .combinedClickable(
+                    onClick = { onTap() },
+                    onLongClick = { onLongPress() },
+                )
                 .padding(vertical = 0.3f.gridUnitsAsDp()),
         ) {
             LightText(
-                text = "${verse.verse}",
+                text = if (saved) "${verse.verse}\u00A0•" else "${verse.verse}",
                 variant = LightTextVariant.Superfine,
                 lighten = true,
                 modifier = Modifier
@@ -309,6 +512,58 @@ class ReaderScreen(
                 text = verse.text,
                 variant = LightTextVariant.Paragraph,
             )
+        }
+    }
+
+    @Composable
+    private fun ConfirmDialog(
+        message: String,
+        confirmLabel: String,
+        onConfirm: () -> Unit,
+        onCancel: () -> Unit,
+    ) {
+        // Full-screen dim scrim; tap anywhere outside the panel to cancel.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(LightThemeTokens.colors.background.copy(alpha = 0.92f))
+                .lightClickable { onCancel() },
+            verticalArrangement = Arrangement.Center,
+        ) {
+            // Panel — swallows taps so they don't hit the scrim.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .lightClickable { }
+                    .padding(horizontal = 2f.gridUnitsAsDp()),
+            ) {
+                LightText(
+                    text = message,
+                    variant = LightTextVariant.Heading,
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2f.gridUnitsAsDp()),
+                    horizontalArrangement = Arrangement.spacedBy(3f.gridUnitsAsDp()),
+                ) {
+                    LightText(
+                        text = "CANCEL",
+                        variant = LightTextVariant.Button,
+                        lighten = true,
+                        modifier = Modifier
+                            .lightClickable { onCancel() }
+                            .padding(vertical = 0.75f.gridUnitsAsDp()),
+                    )
+                    LightText(
+                        text = confirmLabel,
+                        variant = LightTextVariant.Button,
+                        modifier = Modifier
+                            .lightClickable { onConfirm() }
+                            .padding(vertical = 0.75f.gridUnitsAsDp()),
+                    )
+                }
+            }
         }
     }
 }

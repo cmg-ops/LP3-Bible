@@ -38,3 +38,9 @@ fun BibleScreenSurface(content: @Composable () -> Unit) {
         }
     }
 }
+
+/** Formats a saved-at timestamp like "June 10, 2026". */
+fun formatSavedDate(millis: Long): String {
+    val formatter = java.text.SimpleDateFormat("MMMM d, yyyy", java.util.Locale.US)
+    return formatter.format(java.util.Date(millis))
+}

@@ -20,15 +20,19 @@ A simple, distraction-free Bible for LightOS. Built with the official
   translations your account unlocks, including licensed versions chosen on
   your API.Bible plan. Fetched live, with each publisher's copyright notice
   displayed as required.
-- **Lookup.** Type a reference ("John 3:16", "Ps 23", or just "Genesis") and
-  jump straight there — the chapter grid marks the target chapter and the
-  verse arrives highlighted and scrolled into view.
 - **Search.** Approximate full-text search across the selected version
   (exact phrase, any-order words, and word-stem matching). ESV and API.Bible
   versions use their providers' own search engines.
-- **Reading.** Tap any verse to highlight it while you read. Highlights are
-  intentionally session-only — nothing is tracked or saved. Previous/next
-  buttons walk chapter to chapter across book boundaries.
+- **Reading.** Tap any verse to highlight it while you read (session-only).
+  Previous/next buttons walk chapter to chapter across book boundaries.
+- **Where I Left Off.** Tap the star in the reader to save your spot for the
+  current version; the home menu jumps you back there. Saving is always
+  deliberate — reading and searching never move your spot.
+- **Saved verses.** Long-press a verse to save it. The Saved screen lists your
+  current version's saves first, then saves made in other versions (each
+  showing the reference, version, and date), and tapping any save opens it in
+  your current version. Saves are stored per version with an offline text
+  snapshot, so the list works with no connection.
 
 ## Scripture sources & licensing
 
