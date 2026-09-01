@@ -4,6 +4,5 @@ label = "Bible"
 versionCode = 11
 versionName = "2.0"
 permissions = ["android.permission.INTERNET"]
-# change if you run this on an LP3!
-# serverPackage = "com.lightos"
-serverPackage = "com.thelightphone.sdk.emulator"
+# change to com.thelightphone.sdk.emulator if you run this on the SDK emulator
+serverPackage = "com.lightos"
