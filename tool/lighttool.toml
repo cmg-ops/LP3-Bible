@@ -1,8 +1,10 @@
 [tool]
 id = "com.dailyhobbyist.bible"
 label = "Bible"
-versionCode = 11
-versionName = "2.0"
+versionCode = 12
+versionName = "2.1.0"
 permissions = ["android.permission.INTERNET"]
-# change to com.thelightphone.sdk.emulator if you run this on the SDK emulator
+capabilities = []
+# for the LightOS emulator, use the line below and build with -DlightSdk.allowAltServerPackage=true
+# serverPackage = "com.thelightphone.sdk.emulator"
 serverPackage = "com.lightos"

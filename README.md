@@ -3,7 +3,7 @@
 A Bible reader for the **Light Phone 3**, built under the DailyHobbyist name.
 
 - **Package:** `com.dailyhobbyist.bible`
-- **Version:** 2.0 (versionCode 11)
+- **Version:** 2.1.0 (versionCode 12) — built on Light SDK 0.2.0
 - **Permissions:** `android.permission.INTERNET`
 
 ## What this repo is
@@ -24,7 +24,7 @@ against this repo.
 **`serverPackage` must be `com.lightos`.** The value `com.thelightphone.sdk.emulator` is
 for the SDK emulator only. This repo was committed in emulator mode once, which produces a
 build that will not run on the phone; it was corrected on 2026-09-01. Check this line
-before every build.
+before every build. Since SDK 0.2.0, an emulator build also needs `-DlightSdk.allowAltServerPackage=true`.
 
 ## Related
 
